@@ -5,7 +5,7 @@ from typing import Iterable
 
 import cv2
 import numpy as np
-from PIL import Image
+from PIL import Image, ImageOps
 
 from pothole.model import get_model
 from pothole.types import Detection
@@ -16,15 +16,11 @@ def _pil_to_bgr(pil_img: Image.Image) -> np.ndarray:
     return cv2.cvtColor(rgb, cv2.COLOR_RGB2BGR)
 
 
-def _bgr_to_png_bytes(bgr: np.ndarray) -> bytes:
-    ok, buf = cv2.imencode(".png", bgr)
+def _encode_bgr(bgr: np.ndarray, ext: str) -> bytes:
+    ok, buf = cv2.imencode(ext, bgr)
     if not ok:
-        raise RuntimeError("Failed to encode image as PNG.")
+        raise RuntimeError(f"Failed to encode image as {ext}.")
     return buf.tobytes()
-
-
-def predict_potholes_from_pil(pil_img: Image.Image) -> list[Detection]:
-    return predict_from_pil(pil_img)
 
 
 def predict_from_pil(
@@ -32,8 +28,6 @@ def predict_from_pil(
     *,
     conf: float | None = None,
     iou: float | None = None,
-    device: str | None = None,
-    target_class_name: str | None = None,
 ) -> list[Detection]:
     model, settings, names = get_model()
     frame = _pil_to_bgr(pil_img)
@@ -42,7 +36,7 @@ def predict_from_pil(
         source=frame,
         conf=settings.conf if conf is None else conf,
         iou=settings.iou if iou is None else iou,
-        device=settings.device if device is None else device,
+        device=settings.device,
         verbose=False,
     )
 
@@ -70,8 +64,7 @@ def predict_from_pil(
 
     for (x1, y1, x2, y2), class_id, confidence in zip(xyxy_np, cls_np, conf_np, strict=False):
         det_class_name = names.get(int(class_id), str(int(class_id)))
-        expected = settings.class_name if target_class_name is None else target_class_name
-        if (not settings.allow_any_class) and det_class_name.lower() != expected.lower():
+        if (not settings.allow_any_class) and det_class_name.lower() != settings.class_name.lower():
             continue
 
         # Determine severity based on relative area
@@ -101,8 +94,11 @@ def predict_from_pil(
     return detections
 
 
-def draw_detections(pil_img: Image.Image, detections: Iterable[Detection]) -> bytes:
+def draw_detections(pil_img: Image.Image, detections: Iterable[Detection], ext: str = ".png") -> bytes:
     frame = _pil_to_bgr(pil_img)
+    # Scale line and text size with the image so boxes stay readable on large photos.
+    scale = max(1.0, max(frame.shape[:2]) / 800.0)
+    thickness = max(2, round(2 * scale))
 
     for det in detections:
         x1, y1, x2, y2 = int(det.x1), int(det.y1), int(det.x2), int(det.y2)
@@ -114,21 +110,26 @@ def draw_detections(pil_img: Image.Image, detections: Iterable[Detection]) -> by
         elif det.severity.lower() == "neutral":
             color = (0, 165, 255) # Orange
 
-        cv2.rectangle(frame, (x1, y1), (x2, y2), color, 2)
+        cv2.rectangle(frame, (x1, y1), (x2, y2), color, thickness)
         label = f"{det.severity} {det.class_name} {det.confidence:.2f}"
+        (text_w, _), _ = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 0.6 * scale, thickness)
+        # Keep the label inside the image when the box touches the right edge.
+        text_x = max(0, min(x1, frame.shape[1] - text_w))
         cv2.putText(
             frame,
             label,
-            (x1, max(20, y1 - 6)),
+            (text_x, max(round(20 * scale), y1 - round(6 * scale))),
             cv2.FONT_HERSHEY_SIMPLEX,
-            0.6,
+            0.6 * scale,
             color,
-            2,
+            thickness,
             cv2.LINE_AA,
         )
 
-    return _bgr_to_png_bytes(frame)
+    return _encode_bgr(frame, ext)
 
 
 def load_image_bytes(image_bytes: bytes) -> Image.Image:
-    return Image.open(io.BytesIO(image_bytes))
+    img = Image.open(io.BytesIO(image_bytes))
+    # Phone cameras store rotation in EXIF; apply it so the model sees the photo upright.
+    return ImageOps.exif_transpose(img).convert("RGB")

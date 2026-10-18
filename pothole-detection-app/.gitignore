@@ -11,3 +11,9 @@ runs/
 
 .env
 
+
+# Runtime data: database, uploaded photos, signing key
+var/
+
+# Downloaded model weights
+models/

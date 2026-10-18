@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass
+from pathlib import Path
 
 
 def _env_float(name: str, default: float) -> float:
@@ -35,11 +36,16 @@ class Settings:
     allow_any_class: bool
 
 
+# Where scripts/download_model.py saves the pretrained weights.
+DEFAULT_MODEL_PATH = Path(__file__).resolve().parent.parent / "models" / "pothole" / "best.pt"
+
+
 def get_settings() -> Settings:
-    model_path = os.getenv("POTHOLE_MODEL_PATH", "").strip()
-    if not model_path:
+    model_path = os.getenv("POTHOLE_MODEL_PATH", "").strip() or str(DEFAULT_MODEL_PATH)
+    if not Path(model_path).is_file():
         raise RuntimeError(
-            "POTHOLE_MODEL_PATH is not set. Point it to a YOLO weights file (e.g. runs\\detect\\train\\weights\\best.pt)."
+            f"Model weights not found at {model_path}. Run `python scripts/download_model.py` "
+            "or set POTHOLE_MODEL_PATH to a YOLO weights file."
         )
 
     return Settings(

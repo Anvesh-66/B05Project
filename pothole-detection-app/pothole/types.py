@@ -13,3 +13,7 @@ class Detection:
     x2: float
     y2: float
     severity: str = "Neutral"
+    # Relative depth from pothole.depth (0 = flat); None when it could not be measured.
+    depth_index: float | None = None
+    # The pothole looks filled with water, so its depth was not measured.
+    has_water: bool = False
