@@ -1,4 +1,5 @@
 import 'package:flutter/foundation.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 import 'models/report.dart';
 import 'services/api_client.dart';
@@ -25,6 +26,8 @@ class AuthController extends ChangeNotifier {
       if (session != null) {
         api.token = session.token;
         user = session.user;
+        // Save token to SharedPreferences for background tasks
+        await _saveTokenForBackground(session.token);
       }
     } catch (_) {
       // Unreadable storage is treated as signed out.
@@ -54,6 +57,8 @@ class AuthController extends ChangeNotifier {
       api.token = session.token;
       user = session.user;
       await store.write(session);
+      // Save token to SharedPreferences for background tasks
+      await _saveTokenForBackground(session.token);
     } on ApiException catch (e) {
       error = e.message;
     } catch (e) {
@@ -61,6 +66,17 @@ class AuthController extends ChangeNotifier {
     }
     busy = false;
     notifyListeners();
+  }
+
+  /// Save auth token to SharedPreferences for background tasks to access
+  Future<void> _saveTokenForBackground(String token) async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setString('auth_token', token);
+      await prefs.setString('api_base_url', api.baseUrl);
+    } catch (e) {
+      print('Error saving token for background: $e');
+    }
   }
 
   void clearError() {
@@ -76,6 +92,10 @@ class AuthController extends ChangeNotifier {
     notifyListeners();
     try {
       await store.clear();
+      // Clear token from SharedPreferences
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.remove('auth_token');
+      await prefs.remove('api_base_url');
     } catch (_) {
       // The in-memory session is already gone; nothing more to do.
     }

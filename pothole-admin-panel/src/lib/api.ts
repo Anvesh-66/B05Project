@@ -32,6 +32,8 @@ export interface ReportSummary {
   severe_count: number;
   latitude: number | null;
   longitude: number | null;
+  address: string | null;
+  area: string | null;
   created_at: string;
   resolved_at: string | null;
   reporter_name: string;

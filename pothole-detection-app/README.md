@@ -110,6 +110,30 @@ Environment variables, all optional:
 - `POTHOLE_DEPTH_NEUTRAL`, `POTHOLE_DEPTH_SEVERE`: depth index at which a pothole counts as at least Neutral / Severe (defaults `0.04`, `0.10`)
 - `POTHOLE_GEOCODE`: set to `0` to skip the address lookup
 
+**Email Notifications (optional):**
+
+- `SMTP_HOST`: SMTP server hostname (e.g., `smtp.gmail.com`)
+- `SMTP_PORT`: SMTP server port (default `587`)
+- `SMTP_USER`: SMTP username/email for authentication
+- `SMTP_PASSWORD`: SMTP password or app-specific password
+- `SMTP_FROM_EMAIL`: Email address that appears as sender
+- `SMTP_FROM_NAME`: Display name for sender (default `Pothole Detection System`)
+
+When SMTP is configured, users receive emails:
+- When they submit a pothole report (confirmation with report details)
+- When an admin changes the report status (status update notification)
+
+If SMTP is not configured, the system works normally but emails are not sent.
+
+**Weather Integration (optional):**
+
+- `WEATHER_API_KEY`: OpenWeatherMap API key (get free at https://openweathermap.org/api)
+
+When configured:
+- Adjusts risk levels based on current rainfall
+- Wet conditions increase severity (water hides potholes, causes hydroplaning)
+- MED risk → HIGH in heavy rain, LOW risk → MED in rain
+
 ## Tests
 
 ```powershell

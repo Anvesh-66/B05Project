@@ -132,11 +132,33 @@ export default function Dashboard({ token, user, onSignOut }: Props) {
     setError("");
     try {
       const updated = await updateStatus(token, id, status);
+      const oldStatus = reports.find((r) => r.id === id)?.status;
+      
       setReports((current) =>
         current.map((r) => (r.id === id ? { ...r, status: updated.status, resolved_at: updated.resolved_at } : r)),
       );
       setStats(await fetchStats(token));
       setMapVersion((v) => v + 1);
+
+      // Send email notification to the reporter
+      if (oldStatus && oldStatus !== status) {
+        try {
+          await fetch("/api/send-status-email", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              toEmail: updated.reporter_email,
+              userName: updated.reporter_name,
+              report: updated,
+              oldStatus,
+              newStatus: status,
+            }),
+          });
+        } catch (emailError) {
+          console.error("Failed to send email notification:", emailError);
+          // Don't fail the status update if email fails
+        }
+      }
     } catch (e) {
       handleError(e);
     }

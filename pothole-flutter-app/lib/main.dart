@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:firebase_core/firebase_core.dart';
 
 import 'app_state.dart';
 import 'auth_controller.dart';
@@ -10,9 +11,40 @@ import 'services/alert_notifier.dart';
 import 'services/api_client.dart';
 import 'services/location.dart';
 import 'services/session_store.dart';
+import 'services/firebase_notification_service.dart';
+import 'services/pothole_alert_service.dart';
 import 'theme.dart';
 
-void main() {
+void main() async {
+  WidgetsFlutterBinding.ensureInitialized();
+  
+  // Initialize Firebase (only if google-services.json is configured)
+  try {
+    await Firebase.initializeApp();
+    print('Firebase initialized successfully');
+  } catch (e) {
+    print('Firebase initialization skipped (not configured): $e');
+  }
+
+  // Initialize notification service
+  try {
+    final notificationService = FirebaseNotificationService();
+    await notificationService.initialize();
+    await notificationService.createNotificationChannels();
+    print('Notification service initialized');
+  } catch (e) {
+    print('Notification service initialization error: $e');
+  }
+
+  // Initialize background work manager
+  try {
+    final alertService = PotholeAlertService();
+    await alertService.initialize();
+    print('Background alert service initialized');
+  } catch (e) {
+    print('Background alert service initialization error: $e');
+  }
+
   runApp(const PotholeApp());
 }
 

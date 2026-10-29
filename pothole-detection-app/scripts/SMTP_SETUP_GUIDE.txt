@@ -1,0 +1,118 @@
+EMAIL NOTIFICATION SETUP GUIDE
+================================
+
+This guide helps you configure email notifications for the Pothole Detection System.
+
+PREREQUISITES
+-------------
+1. An email account that supports SMTP
+2. SMTP credentials (username and password/app-specific password)
+
+COMMON SMTP PROVIDERS
+---------------------
+
+1. GMAIL
+   SMTP_HOST=smtp.gmail.com
+   SMTP_PORT=587
+   SMTP_USER=your-email@gmail.com
+   SMTP_PASSWORD=your-app-password
+   
+   Note: You MUST use an App Password, not your regular Gmail password
+   Generate at: https://myaccount.google.com/apppasswords
+   
+2. OUTLOOK/OFFICE 365
+   SMTP_HOST=smtp.office365.com
+   SMTP_PORT=587
+   SMTP_USER=your-email@outlook.com
+   SMTP_PASSWORD=your-password
+   
+3. YAHOO MAIL
+   SMTP_HOST=smtp.mail.yahoo.com
+   SMTP_PORT=587
+   SMTP_USER=your-email@yahoo.com
+   SMTP_PASSWORD=your-app-password
+   
+4. CUSTOM/OTHER
+   Contact your email provider for SMTP settings
+
+SETUP STEPS
+-----------
+
+1. Copy .env.example to .env in the project root:
+   copy .env.example .env
+
+2. Edit .env and uncomment/set these variables:
+   SMTP_HOST=smtp.gmail.com
+   SMTP_PORT=587
+   SMTP_USER=your-email@gmail.com
+   SMTP_PASSWORD=your-app-password
+   SMTP_FROM_EMAIL=noreply@yourdomain.com
+   SMTP_FROM_NAME=Pothole Detection System
+
+3. Restart the backend server:
+   .\scripts\run_backend.ps1
+
+TESTING EMAIL
+-------------
+
+To test if email is working:
+
+1. Create a test user account via the API
+2. Submit a pothole report
+3. Check the user's email inbox for confirmation
+4. As admin, change the report status
+5. Check for status update email
+
+EMAIL NOTIFICATIONS
+-------------------
+
+Users receive emails in these scenarios:
+
+1. REPORT SUBMITTED
+   - Triggered when a user submits a new pothole report
+   - Contains: Report number, location, detections, risk level
+   - Status: Pending Review
+
+2. STATUS CHANGED
+   - Triggered when admin updates report status
+   - Contains: Old status -> New status, report summary
+   - Includes special message for resolved reports
+
+TROUBLESHOOTING
+---------------
+
+If emails are not being sent:
+
+1. Check server logs for email-related errors
+2. Verify SMTP credentials are correct
+3. For Gmail: Ensure you're using App Password, not regular password
+4. Check firewall isn't blocking SMTP port (587)
+5. Verify SMTP_HOST and SMTP_PORT are correct
+6. Test SMTP connection manually with telnet:
+   telnet smtp.gmail.com 587
+
+DISABLING EMAIL
+---------------
+
+To disable email notifications:
+- Simply don't set SMTP environment variables
+- The system will work normally without sending emails
+- Check logs for "Email not sent: SMTP not configured"
+
+SECURITY NOTES
+--------------
+
+1. NEVER commit .env file to version control
+2. Use App Passwords instead of main passwords
+3. Keep SMTP credentials secure
+4. Use environment variables in production
+5. Consider using dedicated email service for production
+   (SendGrid, Amazon SES, Mailgun, etc.)
+
+SUPPORT
+-------
+
+For issues or questions:
+- Check backend logs: Look for "Email sent" or "Failed to send email"
+- Verify environment variables are loaded
+- Test with a simple SMTP client first

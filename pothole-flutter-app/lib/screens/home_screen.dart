@@ -65,7 +65,7 @@ class HomeScreen extends StatelessWidget {
             StatCard(value: '${state.dashboard.total}', label: 'Reported'),
             StatCard(
               value: '${state.potholes.where((p) => p.severity == Severity.high && !p.isResolved).length}',
-              label: 'High open',
+              label: 'High risk',
               color: c.high,
             ),
             StatCard(value: '${state.dashboard.resolved}', label: 'Resolved', color: c.low),

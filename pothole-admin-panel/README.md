@@ -39,10 +39,33 @@ For a production build: `npm run build`, then `npm start`.
 
 The browser only talks to this app. Requests to `/api/*` are forwarded to the backend
 (see `next.config.ts`), which is why the backend needs no CORS configuration.
+Exception: `/api/send-status-email` is handled by Next.js for email notifications.
 
 The backend address defaults to `http://127.0.0.1:8000`. To change it, copy `.env.example`
 to `.env.local` and edit `BACKEND_URL`. It is read when the app is built or started in dev
 mode, so restart (or rebuild) after changing it.
+
+## Email Notifications (Optional)
+
+The admin panel can send email notifications to users when their report status changes.
+
+To enable email notifications:
+
+1. Copy `.env.example` to `.env.local`
+2. Add SMTP configuration:
+   ```
+   SMTP_HOST=smtp.gmail.com
+   SMTP_PORT=587
+   SMTP_USER=your-email@gmail.com
+   SMTP_PASSWORD=your-app-password
+   SMTP_FROM_EMAIL=admin@potholedetection.com
+   SMTP_FROM_NAME=Pothole Admin Panel
+   ```
+3. Restart the dev server or rebuild
+
+**Note:** For Gmail, you need to use an [App Password](https://myaccount.google.com/apppasswords), not your regular password.
+
+When configured, users automatically receive professional email notifications when admins change their report status (pending → in_review → resolved).
 
 ## Layout
 

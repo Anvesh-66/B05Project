@@ -46,6 +46,11 @@ class Report(SQLModel, table=True):
     status: str = Field(default="pending", index=True)
     created_at: datetime = Field(default_factory=utcnow, index=True)
     resolved_at: datetime | None = None
+    # Enhanced features
+    priority_score: float | None = Field(default=None, index=True)
+    priority_level: str | None = None  # CRITICAL | HIGH | MEDIUM | LOW
+    weather_adjusted: bool = Field(default=False)
+    nearby_reports_count: int = Field(default=0)
 
 
 class DetectionRecord(SQLModel, table=True):
@@ -81,6 +86,10 @@ def init_db() -> None:
             ("area", "VARCHAR"),
             ("top_confidence", "FLOAT NOT NULL DEFAULT 0"),
             ("submitted", "BOOLEAN NOT NULL DEFAULT 1"),
+            ("priority_score", "FLOAT"),
+            ("priority_level", "VARCHAR"),
+            ("weather_adjusted", "BOOLEAN NOT NULL DEFAULT 0"),
+            ("nearby_reports_count", "INTEGER NOT NULL DEFAULT 0"),
         ),
     }
     with engine.begin() as conn:

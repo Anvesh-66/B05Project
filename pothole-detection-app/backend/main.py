@@ -7,8 +7,10 @@ import uuid
 from contextlib import asynccontextmanager
 from dataclasses import replace
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 from typing import Literal
 
+from dotenv import load_dotenv
 from fastapi import Depends, FastAPI, File, Form, HTTPException, Query, UploadFile
 from fastapi.responses import FileResponse
 from PIL import Image, UnidentifiedImageError
@@ -16,9 +18,16 @@ from sqlalchemy import and_, false, func, or_, true
 from sqlalchemy.exc import IntegrityError
 from sqlmodel import Session, select
 
+# Load environment variables from .env file
+load_dotenv(Path(__file__).parent.parent / ".env")
+
 from backend.auth import authenticate, create_token, current_user, hash_password, require_admin
 from backend.db import UPLOAD_DIR, DetectionRecord, Report, User, engine, get_session, init_db, utcnow
+from backend.email_service import send_report_submitted_email, send_status_changed_email
 from backend.geocode import reverse_geocode
+from backend.location_analysis import calculate_aggregated_severity, find_nearby_reports, get_location_cluster_info
+from backend.priority_scoring import calculate_priority_score, get_sample_critical_locations
+from backend.weather_service import adjust_risk_for_weather, get_weather_data
 from backend.schemas import (
     AreaCount,
     DashboardOut,
@@ -186,11 +195,29 @@ def _distance_m(lat1: float, lng1: float, lat2: float, lng2: float) -> float:
 
 
 def _risk(detections: list[Detection]) -> tuple[int, str]:
+    """Calculate overall risk level based on severe potholes and total count.
+    
+    Enhanced Risk Classification:
+    - HIGH: 1+ severe potholes OR 3+ total potholes
+    - MED: 1+ neutral potholes OR 2 total potholes (non-severe)
+    - LOW: Only "Not Severe" detections AND single pothole
+    
+    Logic: If ANY pothole is marked as "Severe" by the model, the overall risk is HIGH.
+    This ensures that severe detections are taken seriously.
+    """
     severe = sum(1 for d in detections if d.severity == "Severe")
-    if severe >= 2:
+    neutral = sum(1 for d in detections if d.severity == "Neutral")
+    total = len(detections)
+    
+    # HIGH risk: Any severe pothole detected OR many potholes
+    if severe >= 1 or total >= 3:
         return severe, "HIGH"
-    if severe == 1 or len(detections) >= 3:
+    
+    # MEDIUM risk: Neutral potholes OR multiple non-severe potholes
+    if neutral >= 1 or total >= 2:
         return severe, "MED"
+    
+    # LOW risk: Single "Not Severe" pothole only
     return severe, "LOW"
 
 
@@ -215,12 +242,23 @@ def _detect(file: UploadFile, conf: float | None, iou: float | None) -> tuple[Im
 
 
 def _with_depth(pil_img: Image.Image, detections: list[Detection]) -> list[Detection]:
-    """Adds a depth index to each detection and lets it raise the box-size severity.
+    """Adds depth index to detections and enhances severity based on depth.
 
-    Water-filled potholes get no depth, because the depth model misreads a water surface.
-    Depth problems never fail the report. Either way the box-size severity is kept.
+    Process:
+    1. Initial severity comes from confidence (>0.50 = Severe)
+    2. Depth estimation provides depth_index for each pothole
+    3. Depth can RAISE severity but never lower it
+    4. Water-filled potholes skip depth (misleads depth model)
+    
+    Depth thresholds (configurable):
+    - depth_index >= 0.10 → Severe
+    - depth_index >= 0.04 → Neutral
+    - depth_index < 0.04 → No change
+    
+    Returns detections with enhanced severity and depth data.
     """
     if not _depth_loaded:
+        logger.info("Depth model not loaded - using confidence-based severity only")
         return detections
     try:
         with _predict_lock:
@@ -230,9 +268,16 @@ def _with_depth(pil_img: Image.Image, detections: list[Detection]) -> list[Detec
         for i, (d, box, wet) in enumerate(zip(detections, boxes, find_water(pil_img, boxes), strict=True)):
             if wet:
                 measured.append(replace(d, has_water=True))
+                logger.debug("Detection %d: Water-filled, depth skipped, severity: %s", i, d.severity)
                 continue
             index = depth_index(inverse_depth, box, boxes[:i] + boxes[i + 1 :])
-            measured.append(replace(d, depth_index=index, severity=severity_with_depth(d.severity, index)))
+            enhanced_severity = severity_with_depth(d.severity, index)
+            if enhanced_severity != d.severity and index is not None:
+                logger.info(
+                    "Detection %d: Depth %.3f raised severity %s → %s",
+                    i, index, d.severity, enhanced_severity
+                )
+            measured.append(replace(d, depth_index=index, severity=enhanced_severity))
         return measured
     except Exception:
         logger.exception("Depth estimation failed; saving the report without depth")
@@ -310,6 +355,55 @@ def _analyse_and_save(
     (UPLOAD_DIR / annotated_file).write_bytes(draw_detections(pil_img, detections, ext=".jpg"))
 
     severe_count, risk = _risk(detections)
+    
+    # Multi-angle analysis: Check for nearby reports
+    nearby_count = 0
+    is_worsening = False
+    if latitude is not None and longitude is not None:
+        nearby_reports = find_nearby_reports(session, latitude, longitude, days_back=30)
+        nearby_count = len(nearby_reports)
+        if nearby_reports:
+            agg_data = calculate_aggregated_severity(nearby_reports)
+            is_worsening = agg_data.get("is_worsening", False)
+            logger.info(
+                "Location has %d nearby reports (cluster analysis: %s risk, %s)",
+                nearby_count,
+                agg_data.get("aggregated_risk"),
+                "worsening" if is_worsening else "stable",
+            )
+    
+    # Weather integration: Adjust risk based on current weather
+    adjusted_risk, weather_info = adjust_risk_for_weather(risk, latitude, longitude)
+    weather_adjusted = adjusted_risk != risk
+    if weather_adjusted:
+        logger.info("Risk adjusted %s → %s due to weather: %s", risk, adjusted_risk, weather_info.get("warning_message"))
+    risk = adjusted_risk
+    
+    # Priority scoring: Calculate comprehensive priority
+    critical_locs = get_sample_critical_locations() if latitude and longitude else None
+    priority_data = calculate_priority_score(
+        risk=risk,
+        severe_count=severe_count,
+        detection_count=len(detections),
+        latitude=latitude,
+        longitude=longitude,
+        critical_locations=critical_locs,
+        road_type=area,  # Use area as proxy for road type
+        report_count=nearby_count + 1,  # Include this report
+        is_worsening=is_worsening,
+        weather_multiplier=weather_info.get("severity_multiplier", 1.0),
+    )
+    
+    logger.info(
+        "Priority score: %.2f (%s) - Base: %d, Location: %.2fx, Weather: %.2fx, Reports: %d",
+        priority_data["priority_score"],
+        priority_data["priority_level"],
+        priority_data["breakdown"]["base_score"],
+        priority_data["breakdown"]["location_multiplier"],
+        priority_data["breakdown"]["weather_multiplier"],
+        nearby_count + 1,
+    )
+    
     report = Report(
         user_id=user.id,
         image_file=image_file,
@@ -323,6 +417,10 @@ def _analyse_and_save(
         risk=risk,
         top_confidence=max(d.confidence for d in detections),
         submitted=submitted,
+        priority_score=priority_data["priority_score"],
+        priority_level=priority_data["priority_level"],
+        weather_adjusted=weather_adjusted,
+        nearby_reports_count=nearby_count,
     )
     session.add(report)
     session.flush()
@@ -343,6 +441,21 @@ def _analyse_and_save(
     )
     session.commit()
     session.refresh(report)
+    
+    # Send confirmation email if report is submitted (not a draft)
+    if submitted:
+        send_report_submitted_email(
+            to_email=user.email,
+            user_name=user.name,
+            report_id=report.id,
+            detection_count=report.detection_count,
+            severe_count=severe_count,
+            risk=risk,
+            address=address,
+            area=area,
+            created_at=_iso(report.created_at) or "",
+        )
+    
     return SubmitResponse(report=_detail(session, report, user))
 
 
@@ -394,6 +507,19 @@ def submit_draft(
         session.add(report)
         session.commit()
         session.refresh(report)
+        
+        # Send confirmation email to user
+        send_report_submitted_email(
+            to_email=user.email,
+            user_name=user.name,
+            report_id=report.id,
+            detection_count=report.detection_count,
+            severe_count=report.severe_count,
+            risk=report.risk,
+            address=report.address,
+            area=report.area,
+            created_at=_iso(report.created_at) or "",
+        )
     return _detail(session, report, user)
 
 
@@ -465,12 +591,30 @@ def update_report_status(
     session: Session = Depends(get_session),
 ) -> ReportDetail:
     report = _get_report(session, report_id, admin)
+    old_status = report.status
     report.status = req.status
     report.resolved_at = utcnow() if req.status == "resolved" else None
     session.add(report)
     session.commit()
     session.refresh(report)
-    return _detail(session, report, session.get(User, report.user_id))
+    
+    # Send status change notification to the reporter
+    reporter = session.get(User, report.user_id)
+    if reporter and old_status != req.status:
+        send_status_changed_email(
+            to_email=reporter.email,
+            user_name=reporter.name,
+            report_id=report.id,
+            old_status=old_status,
+            new_status=req.status,
+            risk=report.risk,
+            address=report.address,
+            area=report.area,
+            detection_count=report.detection_count,
+            resolved_at=_iso(report.resolved_at),
+        )
+    
+    return _detail(session, report, reporter or admin)
 
 
 @app.delete("/reports/{report_id}", status_code=204)
@@ -603,3 +747,95 @@ def stats(user: User = Depends(current_user), session: Session = Depends(get_ses
         medium_risk=count(Report.risk == "MED"),
         low_risk=count(Report.risk == "LOW"),
     )
+
+
+# ---------- enhanced features ----------
+
+
+@app.get("/reports/{report_id}/cluster-analysis")
+def get_cluster_analysis(
+    report_id: int,
+    user: User = Depends(current_user),
+    session: Session = Depends(get_session),
+) -> dict:
+    """Get multi-angle analysis for reports at the same location."""
+    report = _get_report(session, report_id, user)
+    
+    if report.latitude is None or report.longitude is None:
+        return {"error": "Report has no location data"}
+    
+    cluster_info = get_location_cluster_info(session, report.latitude, report.longitude)
+    
+    return {
+        "report_id": report_id,
+        "location": {"latitude": report.latitude, "longitude": report.longitude},
+        "cluster_info": cluster_info,
+    }
+
+
+@app.get("/reports/{report_id}/weather-impact")
+def get_weather_impact(
+    report_id: int,
+    user: User = Depends(current_user),
+    session: Session = Depends(get_session),
+) -> dict:
+    """Get current weather impact on this report's severity."""
+    report = _get_report(session, report_id, user)
+    
+    if report.latitude is None or report.longitude is None:
+        return {"error": "Report has no location data"}
+    
+    weather_data = get_weather_data(report.latitude, report.longitude)
+    
+    if not weather_data:
+        return {"error": "Weather data not available", "configured": False}
+    
+    from backend.weather_service import assess_weather_impact
+    impact = assess_weather_impact(weather_data)
+    
+    return {
+        "report_id": report_id,
+        "current_risk": report.risk,
+        "weather": weather_data,
+        "impact": impact,
+    }
+
+
+@app.get("/reports/priority-queue")
+def get_priority_queue(
+    limit: int = Query(50, ge=1, le=200),
+    min_priority: str = Query("MEDIUM", description="Minimum priority level: LOW, MEDIUM, HIGH, CRITICAL"),
+    user: User = Depends(require_admin),
+    session: Session = Depends(get_session),
+) -> list[dict]:
+    """Get reports sorted by priority score (admin only).
+    
+    Useful for maintenance crews to prioritize repairs.
+    """
+    priority_order = {"CRITICAL": 4, "HIGH": 3, "MEDIUM": 2, "LOW": 1}
+    min_level = priority_order.get(min_priority, 2)
+    
+    stmt = (
+        select(Report, User)
+        .join(User, User.id == Report.user_id)
+        .where(
+            Report.submitted.is_(True),
+            Report.status != "resolved",
+            Report.priority_score.is_not(None),
+        )
+        .order_by(Report.priority_score.desc(), Report.created_at.desc())
+        .limit(limit)
+    )
+    
+    results = []
+    for report, reporter in session.exec(stmt).all():
+        if priority_order.get(report.priority_level, 0) >= min_level:
+            results.append({
+                **_summary_fields(report, reporter),
+                "priority_score": report.priority_score,
+                "priority_level": report.priority_level,
+                "weather_adjusted": report.weather_adjusted,
+                "nearby_reports_count": report.nearby_reports_count,
+            })
+    
+    return results

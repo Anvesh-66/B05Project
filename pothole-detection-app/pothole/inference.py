@@ -67,13 +67,13 @@ def predict_from_pil(
         if (not settings.allow_any_class) and det_class_name.lower() != settings.class_name.lower():
             continue
 
-        # Determine severity based on relative area
-        box_area = (x2 - x1) * (y2 - y1)
-        area_ratio = box_area / img_area
-
-        if area_ratio > 0.05:
+        # Determine severity based on confidence score
+        # High confidence (>0.50) indicates a clear, severe pothole
+        # Medium confidence (0.30-0.50) indicates moderate severity
+        # Low confidence (<0.30) indicates minor or uncertain detection
+        if confidence > 0.50:
             severity = "Severe"
-        elif area_ratio > 0.01:
+        elif confidence > 0.30:
             severity = "Neutral"
         else:
             severity = "Not Severe"

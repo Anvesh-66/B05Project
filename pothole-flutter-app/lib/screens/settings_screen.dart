@@ -6,6 +6,7 @@ import '../models/pothole.dart';
 import '../services/location.dart';
 import '../theme.dart';
 import '../widgets/common.dart';
+import '../widgets/background_alerts_settings.dart';
 
 /// Alert and display preferences, the signed-in account, and about the project.
 class SettingsScreen extends StatelessWidget {
@@ -78,6 +79,8 @@ class SettingsScreen extends StatelessWidget {
                   child: const Text('Update'),
                 ),
               ),
+              const SectionHeader('Background Alerts'),
+              BackgroundAlertsSettings(apiClient: state.api),
               const SectionHeader('Account'),
               if (user != null)
                 _SettingRow(
